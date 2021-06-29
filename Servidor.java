@@ -6,25 +6,20 @@ import java.net.InetAddress;
 import java.util.Hashtable;
 import java.util.Map;
 
-import com.google.gson.Gson;
-
 public class Servidor {
+	
+	private static boolean debug = true;
 	
 	private static int porta = 10098;
 	
-	// #############################################################################
-	// #############################################################################
-	// #############################################################################
-	// #############################################################################
-	// #############################################################################
-	// OBSERVAÇÕES:
-	// Minha ideia foi criar uma list aproveitando o objeto mensagem no formato json
-	// (não estava conseguindo uma list de objetos Mensagem, mas vou tentar descobrir o porque, mas a ideia é a mesma)
-	// Fiz isso porque o objeto já tem informação do IP, porta, arquivos que contém....
+	// O servidor possui:
+	// Thread principal (ouvir UDP)
+	// Thread principal chama thread de indentificar pacotes UDP
+	// Thread de indentificar pacotes UDP pode chamar threads de de processamento
 	
 	//static ArrayList<String> listaPeers = new ArrayList<String>();
-	static Hashtable<String[], String> listaPeers = new Hashtable<>();
-
+	static Hashtable<String, String> listaPeers = new Hashtable<>();
+	
 	public static void main(String[] args) throws Exception {
 
 		// Temos que especificar a porta porque o cliente vai se conectar nela
@@ -35,11 +30,11 @@ public class Servidor {
 			// Declaração do buffer de recebimento
 			byte[] recBuffer = new byte[1024];
 			
-			//Inicializar o pacote onde será recebido
+			// Inicializar o pacote onde será recebido
 			DatagramPacket recPkt = new DatagramPacket(recBuffer, recBuffer.length);
 			
 			// Receber o pacote no recPkt
-			System.out.println("\n Esperando alguma mensagem");
+			printDebug("\n Esperando alguma mensagem");
 			serverSocket.receive(recPkt); // BLOCKING
 			
 			IdentificarPacote idPkt = new IdentificarPacote(serverSocket, recPkt);
@@ -50,12 +45,13 @@ public class Servidor {
 	
 	private static void mostrarPeers() {
 		
-		System.out.println("Peers registrados:");
+		printDebug("\nPeers registrados:");
 		
-        // Iterating using enhanced for loop
-		for (Map.Entry<String[], String> e : listaPeers.entrySet()) {
-			System.out.println("IP: " + e.getKey()[0] + " ; PORT: " + e.getKey()[1] + " \n " + e.getValue() + "\n");
+		for (Map.Entry<String, String> e : listaPeers.entrySet()) {
+			printDebug("IP/PORT: " + e.getKey() + "/" + e.getValue());
 		}
+		
+		printDebug("");
 	}
 	
 	// Classe para identificar o tipo de requisição que o servidor está recebendo
@@ -70,21 +66,27 @@ public class Servidor {
 		}
 		
 		public void run() {
-			System.out.println("Pacote recebido, identificando...");
+			printDebug("Pacote recebido, identificando...");
 			
 			Mensagem mensagem = Mensagem.decodificar(recPkt);
 			
-			System.out.println("PORT: " + mensagem.getPortaTCP());
-			
 			switch (mensagem.getTipo()) {
+			
 	        	case "JOIN":
 					JoinPeer joinPeer = new JoinPeer(serverSocket, recPkt, mensagem);
 					joinPeer.start();
 					break;
+					
 	        	case "LEAVE":
 					LeavePeer leavePeer = new LeavePeer(serverSocket, recPkt, mensagem);
 					leavePeer.start();
 					break;
+					
+	        	case "SEARCH":
+	        		SearchPeer searchPeer = new SearchPeer(serverSocket, recPkt, mensagem);
+					searchPeer.start();
+					break;
+					
         		default:
         			System.out.println("Pacote não identificado!");
 			}
@@ -109,32 +111,32 @@ public class Servidor {
 		
 		public void run() {
 			
-			String[] key = {
-					mensagem.getIp(),
-					mensagem.getPortaTCP()
-			};
+			String key = mensagem.getIp() + "/" + mensagem.getPortaTCP();
 			
 			listaPeers.put(key, mensagem.getListaArquivos());
 			
+			printDebug("Peer registrado");
 			mostrarPeers();
 			
+			String[] argumentos = {"JOIN_OK"};
+			
 			try {
-				enviarCallbackUDP(serverSocket, recPkt, "JOIN_OK");
-				System.out.println("JOIN_OK enviado");
-				System.out.println("IP: " + recPkt.getAddress());
-				System.out.println("PORTA UDP: " + recPkt.getPort());
+				enviarCallbackUDP(serverSocket, recPkt, argumentos);
+				printDebug("JOIN_OK enviado");
+				printDebug("IP: " + recPkt.getAddress());
+				printDebug("PORTA UDP: " + recPkt.getPort());
 			}
 			catch(Exception e) {
 				System.out.println("Erro ao enviar LEAVE_OK: " + e);
 			}
-			
 		}
+		
 	}
 	
 	static class LeavePeer extends Thread{
 		
-		DatagramPacket recPkt;
 		DatagramSocket serverSocket;
+		DatagramPacket recPkt;
 		Mensagem mensagem;
 		
 		public LeavePeer(DatagramSocket ss, DatagramPacket pkt, Mensagem msg) {
@@ -145,27 +147,20 @@ public class Servidor {
 		
 		public void run() {
 			
-			String[] argumentos = {
-					"DADO",
-					mensagem.getIp(),
-					mensagem.getPortaTCP(),
-					mensagem.getListaArquivos()
-			};
+			String key = mensagem.getIp() + "/" + mensagem.getPortaTCP();
 			
-			Mensagem peer = new Mensagem(argumentos);
+			listaPeers.remove(key);
 			
-			Gson gson = new Gson();
-			String peerJson = gson.toJson(peer);
-			
-			listaPeers.remove(peerJson);
-			
+			printDebug("Peer removido");
 			mostrarPeers();
 			
+			String[] argumentos = {"LEAVE_OK"};
+			
 			try {
-				enviarCallbackUDP(serverSocket, recPkt, "LEAVE_OK");
-				System.out.println("LEAVE_OK enviado");
-				System.out.println("IP: " + recPkt.getAddress());
-				System.out.println("PORTA UDP: " + recPkt.getPort());
+				enviarCallbackUDP(serverSocket, recPkt, argumentos);
+				printDebug("LEAVE_OK enviado");
+				printDebug("IP: " + recPkt.getAddress());
+				printDebug("PORTA UDP: " + recPkt.getPort());
 			}
 			catch(Exception e) {
 				System.out.println("Erro ao enviar LEAVE_OK: " + e);
@@ -174,13 +169,59 @@ public class Servidor {
 		}
 	}
 	
-	private static void enviarCallbackUDP(DatagramSocket serverSocket, DatagramPacket recPkt, String mensagem) throws Exception {
+	static class SearchPeer extends Thread{
+		
+		DatagramSocket serverSocket;
+		DatagramPacket recPkt;
+		Mensagem mensagem;
+		
+		public SearchPeer(DatagramSocket ss, DatagramPacket pkt, Mensagem msg) {
+			serverSocket = ss;
+			recPkt = pkt;
+			mensagem = msg;
+		}
+		
+		public void run() {
+			
+			String arquivoProcurado = mensagem.getArquivoProcurado();
+			
+			String resultadoSearch = "";
+			
+			// Varrer todos os arquivos de todos os peers procurando a string com o nome
+			for (Map.Entry<String, String> e : listaPeers.entrySet()) {
+				
+				String[] listaArquivos = e.getValue().split("/");
+				
+				for(String arquivo : listaArquivos){
+					if(arquivo.equals(arquivoProcurado)){
+						resultadoSearch = resultadoSearch + e.getKey() + "/";
+				        break;
+				    }
+				}
+			}
+			
+			// Enviar para a classe de mensagem para converter em uma lista e enviar somente a lista
+			String[] argumentos = {
+					"SEARCH_OK",
+					resultadoSearch
+			};
+			
+			try {
+				enviarCallbackUDP(serverSocket, recPkt, argumentos);
+				printDebug("SEARCH_OK enviado");
+				printDebug("IP: " + recPkt.getAddress());
+				printDebug("PORTA UDP: " + recPkt.getPort());
+			}
+			catch(Exception e) {
+				System.out.println("Erro ao enviar LEAVE_OK: " + e);
+			}
+			
+		}
+	}
+	
+	private static void enviarCallbackUDP(DatagramSocket serverSocket, DatagramPacket recPkt, String[] argumentos) throws Exception {
 		// Declaração e preenchimento do buffer de envio
 		byte[] sendBuffer = new byte[1024];
-		
-		String[] argumentos = {
-				mensagem
-		};
 		
 		Mensagem msg = new Mensagem(argumentos);
 		
@@ -194,6 +235,12 @@ public class Servidor {
 		
 		serverSocket.send(sendPkt);
 		
+	}
+	
+	private static void printDebug(String msg) {
+		if (debug) {
+			System.out.println(msg);
+		}
 	}
 	
 

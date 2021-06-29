@@ -1,6 +1,8 @@
 package projetosd;
 
 import java.net.DatagramPacket;
+import java.util.Arrays;
+import java.util.List;
 
 import com.google.gson.Gson;
 
@@ -13,8 +15,9 @@ public class Mensagem {
 	private String portaTCP;
 	private String listaArquivos;
 	
-	// Relacionados à requisição 
-	//private 
+	// Relacionados à requisição SEARCH
+	private String arquivoProcurado;
+	private List<String> resultadoSearch;
 	
 	// #############################################################################
 	// #############################################################################
@@ -38,10 +41,21 @@ public class Mensagem {
 	    		ip = argumentos[1];
 	    		portaTCP = argumentos[2];
 	    		listaArquivos = argumentos[3];
+	    		break;
 	    		
 	    	case "LEAVE":
 	    		ip = argumentos[1];
 	    		portaTCP = argumentos[2];
+	    		break;
+	    		
+	    	case "SEARCH":
+	    		arquivoProcurado = argumentos[1];
+	    		break;
+	    		
+	    	case "SEARCH_OK":
+	    		tipo = null;
+	    		resultadoSearch = Arrays.asList(argumentos[1].split("/"));
+	    		break;
 	    	
     		// Mensagens só com o tipo (exemplos: JOIN_OK, LEAVE_OK, etc...)
 	    	default:
@@ -52,10 +66,6 @@ public class Mensagem {
 		//ip = end_ip;
 		//portaTCP = Integer.parseInt(port);
 		//listaArquivos = lista;
-	}
-	
-	public Mensagem() {
-		
 	}
 	
 	public static byte[] codificar(Mensagem msg) {
@@ -90,5 +100,13 @@ public class Mensagem {
 	
 	public String getPortaTCP() {
 		return String.valueOf(portaTCP);
+	}
+	
+	public String getArquivoProcurado() {
+		return arquivoProcurado;
+	}
+	
+	public List<String> getResultadoSearch() {
+		return resultadoSearch;
 	}
 }

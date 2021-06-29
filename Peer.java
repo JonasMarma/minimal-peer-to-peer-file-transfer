@@ -3,24 +3,30 @@ package projetosd;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 
 import com.google.gson.Gson;
 
 import projetosd.Servidor.JoinPeer;
 import projetosd.Servidor.LeavePeer;
+import projetosd.Servidor.SearchPeer;
 
 import java.io.BufferedReader;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.TimeUnit;
 
 public class Peer {
 
-	private static String ip;
-	private static String portaTCP;
+	private static String ipLocal;
+	private static String portLocal;
 	private static String pasta;
 	
 	private static String listaArquivos;
@@ -30,19 +36,29 @@ public class Peer {
 	private static int portaServerUDP = 10098;
 	private static String ipServer = "127.0.0.1";
 	
+	private static String arquivoDownload;
+	private static String ipDownload;
+	private static String portDownload;
+	
+	private static Boolean executando = true;
+	private static Boolean logado = false;
+	
 	public static void main(String[] args) throws Exception {
-
-		Boolean executando = true;
-		Boolean logado = false;
 		
-		// Loop do menu principal
+		// Peer possui as seguintes threads:
+		
+		// Thread principal, para processar o menu
+		// Threads de recebimento de pacotes UDP
+		// Thread que lê pacotes TCP
+			// Subthreads de envio e recebimento
+		
 		while (executando) {
 			
-			System.out.println("\n Escolha um comando: JOIN, SEARCH, DOWNLOAD, LEAVE (?????)");
+			System.out.println("\nEscolha um comando: JOIN, SEARCH, DOWNLOAD, LEAVE");
 			BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
 			
 			String[] comando = reader.readLine().split(" ");
-						
+			
 			switch (comando[0]) {
 			
 	        	case "JOIN":
@@ -59,38 +75,73 @@ public class Peer {
 					
 					requisitarJoin();
 					
-					// TODO: Implementar time out para enviar outra requisição
+					// TODO: Timer!
 					Boolean joinOk = aguardarJoinOk();
 					
-					logado = true;
-					
-					System.out.println("Conectado ao servidor");
+					if (joinOk) {
+						logado = true;
+						
+						// Abrir a porta TCP informada ao servidor para enviar downloads
+						OuvirTCP threadTCP = new OuvirTCP();
+						threadTCP.start();
+						
+						System.out.println("Conectado ao servidor");
+					} else {
+						System.out.println("Não foi possível se conectar");
+					}
 					
 					break;
 	        	
 	        	case "LEAVE":
+	        		
+	        		if (!logado) {
+	        			System.out.println("Não conectado!");
+	        			break;
+	        		}
+	        		
 	    			requisitarLeave();
 	    			
+	    			// TODO: Timer!
 	    			Boolean leaveOk = aguardarLeaveOk();
 	    			
 	    			if (leaveOk == true) {
 	    				System.out.println("Saída permitida");
-	    				executando = false;
 	    				logado = false;
 	    			} else {
 	    				System.out.println("Saída não permitida");
 	    			}
-					
-					break;
-					
+	    			break;
+				
 	        	case "SEARCH":
+	        		
+	        		if (!logado) {
+	        			System.out.println("Não conectado!");
+	        			break;
+	        		}
+	        		
 	        		System.out.println("Informe o nome do arquivo:");
-	        		String arquivo = reader.readLine();
-	        		requisitarSearch(arquivo);
+	        		arquivoDownload = reader.readLine();
+	        		requisitarSearch();
+	        		
+	        		// TODO: Timer
+	        		List<String> resultadoSearch = aguardarResultadoSearch();
+	        		
+	        		System.out.println("Peers com arquivo solicitado:");
+	        		System.out.println(resultadoSearch);
+	        		break;
+	        	
+	        	case "DOWNLOAD":
+	        		System.out.println("Informe IP do peer:");
+	        		ipDownload = reader.readLine();
+	        		
+	        		System.out.println("Informe a porta do peer:");
+	        		portDownload = reader.readLine();
+	        		
+	        		requisitarDownload();
 	    		
 	        	default:
 	    			System.out.println("Comando não identificado!");
-			}	
+			}
 		}
 		
 		// Fechar a conexão
@@ -98,48 +149,104 @@ public class Peer {
 		
 	}
 	
+	// Thread para aguardar entradas de pacotes TCP
+	static class OuvirTCP extends Thread{
+		
+		public void run() {
+			
+			ServerSocket serverSocket;
+			try {
+				
+				// Iniciar a porta especificada para receber pacotes TCP
+				serverSocket = new ServerSocket(Integer.parseInt(portLocal));
+				
+				while (logado) {
+					// Aguardar uma conexão
+					System.out.println("Aguardando conexão TCP");
+					Socket welcomeSocket = serverSocket.accept(); // BLOCKING
+					
+					// Criar thread para leitura e escrita
+					System.out.println("Conexão TCP recebida!");
+					
+					ThreadAtendimento thread = new ThreadAtendimento(welcomeSocket);
+					thread.start();
+				}
+				
+				serverSocket.close();
+				
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	// Atender a uma requisição TCP específica
+	static class ThreadAtendimento extends Thread {
+
+		private Socket no;
+		
+		public ThreadAtendimento(Socket welcomeSocket) {
+			no = welcomeSocket;
+		}
+		
+		public void run() {
+			try {
+			// Cria a cadeia de entrada de informações do socket
+			InputStreamReader is = new InputStreamReader(no.getInputStream());
+			BufferedReader reader = new BufferedReader(is);
+
+			// Cria cadeia de saída
+			OutputStream os = no.getOutputStream();
+			DataOutputStream writer = new DataOutputStream(os);
+			
+			// Ler do socket (cliente envia informação primeiro)
+			String texto = reader.readLine();
+			
+			// Processar a informação
+			System.out.println("Arquivo requisitado: " + texto);
+			
+			// Enviar arquivo solicitado para o cliente
+			writer.writeBytes("DOWNLOAD_NEGADO");
+			
+			} catch (Exception e) {
+				
+			}
+		}
+	}
+	
 	private static void lerInfos() throws IOException {
 		// Ler do teclado IP, porta e pasta
 		BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
 		
-		// #############################################################################
-		// #############################################################################
-		// #############################################################################
-		// #############################################################################
-		// #############################################################################
 		// Ler IP
-		// DÚVIDA: Estou assumindo que se for sempre feita uma execução local, o IP será 127.0.0.1
-		// Sendo assim, esse endereço fica salvo para uma possível implementação com várias máquinas
-		// Mas no projeto, só será usado o 127.0.0.1
-		// Estou correto?
 		System.out.println("Insira o IP: ");
-		ip = reader.readLine();
+		ipLocal = reader.readLine(); //BLOCKING!
 		
-		// #############################################################################
-		// #############################################################################
-		// #############################################################################
-		// #############################################################################
-		// #############################################################################
 		// Ler porta
-		// DÚVIDA: que porta é essa? É mesmo para receber TCP?
-		// Deve ser TCP. não é? No UDP a porta é aleatória...
 		System.out.println("Insira a porta TCP: ");
-		portaTCP = reader.readLine();
+		portLocal = reader.readLine(); //BLOCKING!
 		
 		// Ler pasta
 		//TODO Essa é uma pasta de debug:
 		System.out.println("Insira a pasta: ");
-		//pasta = reader.readLine();
-		pasta = "C:/temp/peer1";
+		String dir = reader.readLine(); //BLOCKING!
+		pasta = "C:/temp/" + dir;
 		
 	}
 	
 	// Método que lê os arquivos na pasta e atualiza a lista de arquivos que o peer possui
 	private static void lerListaArquivos() {
 		
+		listaArquivos = "";
+		
         File f = new File(pasta);
         
         String[] flist = f.list();
+        
+        if (flist == null) {
+        	return;
+        }
         
         for (String nome : flist){
         	listaArquivos = listaArquivos + nome + "/";
@@ -152,8 +259,8 @@ public class Peer {
 		
 		String[] argumentos = {
 				"JOIN",
-				ip,
-				portaTCP,
+				ipLocal,
+				portLocal,
 				listaArquivos
 		};
 		
@@ -164,8 +271,14 @@ public class Peer {
 	
 	private static boolean aguardarJoinOk() throws Exception {		
 		
-		System.out.println("Aguardando LEAVE_OK...");
-		return aguardarCallbackUDP("JOIN_OK");
+		System.out.println("Aguardando JOIN_OK...");
+		
+		Mensagem msgResposta = aguardarCallbackUDP();
+		
+		if (msgResposta.getTipo().equals("JOIN_OK")) {
+			return true;
+		}
+		return false;
 		
 	}
 	
@@ -174,8 +287,8 @@ public class Peer {
 		
 		String[] argumentos = {
 				"LEAVE",
-				ip,
-				portaTCP
+				ipLocal,
+				portLocal
 		};
 		
 		enviarUDP(argumentos);
@@ -186,14 +299,19 @@ public class Peer {
 	private static boolean aguardarLeaveOk() throws Exception {		
 		
 		System.out.println("Aguardando LEAVE_OK...");
-		return aguardarCallbackUDP("LEAVE_OK");
+		Mensagem msgResposta = aguardarCallbackUDP();
+		
+		if (msgResposta.getTipo().equals("LEAVE_OK")) {
+			return true;
+		}
+		return false;
 	}
 	
-	
-	private static void requisitarSearch(String arquivo) throws Exception {
+	private static void requisitarSearch() throws Exception {
 		
 		String[] argumentos = {
-				"SEARCH"
+				"SEARCH",
+				arquivoDownload
 		};
 		
 		enviarUDP(argumentos);
@@ -201,12 +319,25 @@ public class Peer {
 		System.out.println("SEARCH enviado");
 	}
 	
-	private static boolean aguardarSearch() throws Exception {		
+	private static List<String> aguardarResultadoSearch() throws Exception {		
+		System.out.println("Aguardando resultado do SEARCH...");
 		
-		System.out.println("Aguardando LEAVE_OK...");
-		return aguardarCallbackUDP("LEAVE_OK");
+		Mensagem msgResposta = aguardarCallbackUDP();
+		
+		return msgResposta.getResultadoSearch();
 	}
 	
+	private static void requisitarDownload() throws Exception {
+		
+		String[] argumentos = {
+				"DOWNLOAD",
+				arquivoDownload
+		};
+		
+		enviarTCP(argumentos);
+		
+		System.out.println("Requisição DOWNLOAD enviado");
+	}
 	
 	private static void enviarUDP(String[] argumentos) throws Exception {
 		// Endereço de IP do servidor que receberá o datagram
@@ -224,10 +355,36 @@ public class Peer {
 				
 		// Enviar o datagrama
 		clientSocket.send(sendPacket);
-		
 	}
 	
-	private static boolean aguardarCallbackUDP(String callback) throws Exception {
+	// TODO: terminar aqui
+	private static void enviarTCP(String[] argumentos) throws Exception {
+		// Tenta criar uma conexão com o host "remoto" 127.0.0.1 na porta 9000
+		// O socket s tem uma porta designada pelo sistema operacional entre 1024 e 65535
+		Socket s = new Socket(ipDownload, Integer.parseInt(portDownload));
+		
+		// Cria a cadeia de saída (escrita) de informações para o socket
+		OutputStream os = s.getOutputStream();
+		DataOutputStream writer = new DataOutputStream(os);
+	
+		// Cria a cadeia de entrada (leitura) de informações do socket
+		InputStreamReader is = new InputStreamReader(s.getInputStream());
+		BufferedReader reader = new BufferedReader(is);
+		
+		// TODO: passar a utilizar a classe Mensagem para o envio TCP
+		String texto = argumentos[1];
+		
+		// Oq acontece se tirar o \n ?
+		//writer.writeBytes(texto + '\n');
+		writer.writeBytes(texto);
+		
+		String response = reader.readLine(); // BLOCKING!
+		System.out.println("Recebido do Servidor: " + response);
+		// Finalizar comexão
+		s.close();
+	}
+	
+	private static Mensagem aguardarCallbackUDP() throws Exception {
 		// Receber datagrama do servidor
 		
 		// Buffer de recebimento
@@ -239,13 +396,8 @@ public class Peer {
 		clientSocket.receive(recPkt); //BLOCKING
 		
 		// Transformar informação do pacote recebido
-		Mensagem msg = Mensagem.decodificar(recPkt);
+		return Mensagem.decodificar(recPkt);
 		
-		if (msg.getTipo().equals(callback)) {
-			return true;
-		}
-		
-		return false;
 	}
 	
 
