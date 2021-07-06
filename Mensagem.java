@@ -19,19 +19,11 @@ public class Mensagem {
 	private String arquivoProcurado;
 	private List<String> resultadoSearch;
 	
-	// #############################################################################
-	// #############################################################################
-	// #############################################################################
-	// #############################################################################
-	// #############################################################################
-	// OBSERVAÇÕES:
-	// Quando criei a classe, não pensei que haveriam tantos argumentos
-	// Minha ideia é posteriormente modificar o construtor para algo como:
-	// Mensagem(String[] argumentos)
-	// as informações serão preenchidas dinâmicamente no construtor, eventualmente deixando algumas com null
-	// Creio que essa classe também será utilizada para TCP
+	// Relacionado à requisição de Download
+	private String arquivoDownload;
+	private long tamanhoArquivo;
+	private byte[] parteArquivo;
 	
-	//public Mensagem(String tp, String end_ip, String port, String[] lista) {
 	public Mensagem(String[] argumentos) {
 		
 		tipo = argumentos[0];
@@ -56,6 +48,18 @@ public class Mensagem {
 	    		tipo = null;
 	    		resultadoSearch = Arrays.asList(argumentos[1].split("/"));
 	    		break;
+	    		
+	    	case "DOWNLOAD":
+	    		arquivoDownload = argumentos[1];
+	    		break;
+	    		
+	    	case "DOWNLOAD_ACEITO":
+	    		tamanhoArquivo = Long.parseLong(argumentos[1]);
+				break;
+	    		
+	    	case "DADO":
+	    		parteArquivo = argumentos[1].getBytes();
+	    		break;
 	    	
     		// Mensagens só com o tipo (exemplos: JOIN_OK, LEAVE_OK, etc...)
 	    	default:
@@ -68,16 +72,30 @@ public class Mensagem {
 		//listaArquivos = lista;
 	}
 	
-	public static byte[] codificar(Mensagem msg) {
+	public static byte[] codificarUDP(Mensagem msg) {
 		Gson gson = new Gson();
 		String json = gson.toJson(msg);
 		return json.getBytes();
 	}
 	
-	public static Mensagem decodificar(DatagramPacket pkt) {
+	public static String codificarTCP(Mensagem msg) {
+		Gson gson = new Gson();
+		return gson.toJson(msg);
+	}
+	
+	public static Mensagem decodificarUDP(DatagramPacket pkt) {
 		String dados = new String(pkt.getData(),
 							      pkt.getOffset(),
 								  pkt.getLength());
+		
+		Gson gson = new Gson();
+		
+		Mensagem msg = gson.fromJson(dados, Mensagem.class);
+		
+		return msg;
+	}
+	
+	public static Mensagem decodificarTCP(String dados) {
 		
 		Gson gson = new Gson();
 		
@@ -108,5 +126,17 @@ public class Mensagem {
 	
 	public List<String> getResultadoSearch() {
 		return resultadoSearch;
+	}
+	
+	public String getArquivoDownload() {
+		return arquivoDownload;
+	}
+	
+	public byte[] getParteArquivo() {
+		return parteArquivo;
+	}
+	
+	public long getTamanhoArquivo() {
+		return tamanhoArquivo;
 	}
 }

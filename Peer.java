@@ -13,8 +13,11 @@ import projetosd.Servidor.LeavePeer;
 import projetosd.Servidor.SearchPeer;
 
 import java.io.BufferedReader;
+import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -24,6 +27,8 @@ import java.util.TimerTask;
 import java.util.concurrent.TimeUnit;
 
 public class Peer {
+	
+	private static boolean debug = true;
 
 	private static String ipLocal;
 	private static String portLocal;
@@ -43,6 +48,8 @@ public class Peer {
 	private static Boolean executando = true;
 	private static Boolean logado = false;
 	
+	private static int TAM_PACOTE = 100000;
+	
 	public static void main(String[] args) throws Exception {
 		
 		// Peer possui as seguintes threads:
@@ -50,15 +57,18 @@ public class Peer {
 		// Thread principal, para processar o menu
 		// Threads de recebimento de pacotes UDP
 		// Thread que lê pacotes TCP
-			// Subthreads de envio e recebimento
+		// Thread para administrar downloads
+		// Subthreads de envio e recebimento
 		
 		while (executando) {
 			
 			System.out.println("\nEscolha um comando: JOIN, SEARCH, DOWNLOAD, LEAVE");
-			BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+			BufferedReader keyboardReader = new BufferedReader(new InputStreamReader(System.in));
 			
-			String[] comando = reader.readLine().split(" ");
 			
+			String[] comando = keyboardReader.readLine().split(" ");
+			
+						
 			switch (comando[0]) {
 			
 	        	case "JOIN":
@@ -120,7 +130,7 @@ public class Peer {
 	        		}
 	        		
 	        		System.out.println("Informe o nome do arquivo:");
-	        		arquivoDownload = reader.readLine();
+	        		arquivoDownload = keyboardReader.readLine();
 	        		requisitarSearch();
 	        		
 	        		// TODO: Timer
@@ -132,15 +142,17 @@ public class Peer {
 	        	
 	        	case "DOWNLOAD":
 	        		System.out.println("Informe IP do peer:");
-	        		ipDownload = reader.readLine();
+	        		ipDownload = keyboardReader.readLine();
 	        		
 	        		System.out.println("Informe a porta do peer:");
-	        		portDownload = reader.readLine();
+	        		portDownload = keyboardReader.readLine();
 	        		
-	        		requisitarDownload();
-	    		
+	        		//requisitarDownload();
+	        		FazerDownload thread = new FazerDownload();
+	        		thread.run();
+	        		
 	        	default:
-	    			System.out.println("Comando não identificado!");
+	    			System.out.println("Comando não identificado: " + comando[0]);
 			}
 		}
 		
@@ -149,11 +161,98 @@ public class Peer {
 		
 	}
 	
-	// Thread para aguardar entradas de pacotes TCP
-	static class OuvirTCP extends Thread{
+	static class FazerDownload extends Thread{
+				
+		public FazerDownload() {
+			
+		}
 		
 		public void run() {
-			
+
+			try {
+				// TODO: remover ip e port de variável global para permitir múltiplos downloads
+				Socket s = new Socket(ipDownload, Integer.parseInt(portDownload));
+				
+				requisitarDownload(ipDownload, portDownload, s);
+				
+				
+				InputStreamReader is = new InputStreamReader(s.getInputStream());
+				BufferedReader readerTCP = new BufferedReader(is);
+				
+				// Stream para salvar o arquivo
+				FileOutputStream fos = new FileOutputStream(pasta + "/" + arquivoDownload);
+				
+				// TODO: não deixar esse 4096 hardcoded - tem outro lá em baixo quando envia!
+				byte[] buffer = new byte[TAM_PACOTE];
+				
+				boolean fim = false;
+				
+				long tamArquivo;
+				long restante;
+				
+				// TODO: Timer
+				//printDebug("Aguardando resposta TCP");
+				String dados = readerTCP.readLine(); // BLOCKING!
+				
+				Mensagem msg = Mensagem.decodificarTCP(dados);
+				
+				
+				if (msg.getTipo().equals("DOWNLOAD_NEGADO")) {
+					printDebug("O peer recusou o download");
+					fim = true;
+				}
+				
+				if (msg.getTipo().equals("DOWNLOAD_ACEITO")) {
+					
+					printDebug("O peer aceitou transferir o arquivo");
+					
+					tamArquivo = msg.getTamanhoArquivo();
+					// TODO: e quando está continuando um download já iniciado?
+					restante = tamArquivo;
+					
+					printDebug("Tamanho do arquivo: " + String.valueOf(restante));
+					
+					while (restante > 0) {
+						
+						dados = readerTCP.readLine(); // BLOCKING!
+						
+						buffer = msg.getParteArquivo();
+						
+						if (buffer == null) {
+							printDebug("Fim. Restante: " + String.valueOf(restante));
+							break;
+						}
+						
+						fos.write(buffer, 0, buffer.length);
+						
+						restante = restante - TAM_PACOTE;
+						
+						printDebug("Restam: " + String.valueOf(restante));
+					}
+					
+				}
+				
+				// Finalizar conexão
+				fos.close();
+				s.close();
+				
+				
+				printDebug("FIM DO DOWNLOAD");
+				
+			} catch (Exception e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+
+		}
+	}
+	
+	
+	// Thread para aguardar entradas de pacotes TCP
+	static class OuvirTCP extends Thread{
+
+		public void run() {
+
 			ServerSocket serverSocket;
 			try {
 				
@@ -166,10 +265,10 @@ public class Peer {
 					Socket welcomeSocket = serverSocket.accept(); // BLOCKING
 					
 					// Criar thread para leitura e escrita
-					System.out.println("Conexão TCP recebida!");
-					
+					System.out.println("Conexão TCP recebida! Criando thread de atendimento:");
 					ThreadAtendimento thread = new ThreadAtendimento(welcomeSocket);
 					thread.start();
+					
 				}
 				
 				serverSocket.close();
@@ -178,8 +277,10 @@ public class Peer {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
+			
 		}
 	}
+	
 	
 	// Atender a uma requisição TCP específica
 	static class ThreadAtendimento extends Thread {
@@ -192,28 +293,110 @@ public class Peer {
 		
 		public void run() {
 			try {
-			// Cria a cadeia de entrada de informações do socket
-			InputStreamReader is = new InputStreamReader(no.getInputStream());
-			BufferedReader reader = new BufferedReader(is);
-
-			// Cria cadeia de saída
-			OutputStream os = no.getOutputStream();
-			DataOutputStream writer = new DataOutputStream(os);
+				printDebug("Iniciando thread de atendimento ao TCP");
+				// Cria a cadeia de entrada (leitura) de informações do socket
+				InputStreamReader is = new InputStreamReader(no.getInputStream());
+				BufferedReader readerTCP = new BufferedReader(is);
+				
+				printDebug("Iniciando a leitura do pacote TCP");
+				// Ler do socket (cliente envia informação primeiro)
+				String dados = readerTCP.readLine();
+				
+				Mensagem msg = Mensagem.decodificarTCP(dados);
+				
+				
+				switch (msg.getTipo()) {
+					case "DOWNLOAD":
+						
+						printDebug("\nMensagem recebida por TCP: \ntipo: " + msg.getTipo() + "\nArquivo: " + msg.getArquivoDownload() + "\n");
+						
+						// Cria cadeia de saída
+						OutputStream os = no.getOutputStream();
+						DataOutputStream writer = new DataOutputStream(os);
+						
+						boolean permitir = true;
+						
+						// TODO: Usar o método enviarTCP() para fazer o envio dos dados!!!
+						
+						if (permitir) {
+							
+							String path = pasta + "/" + msg.getArquivoDownload();
+							
+					        File f = new File(path);
+					        long fileSize = f.length();
+							
+							String[] args = {"DOWNLOAD_ACEITO",
+											String.valueOf(fileSize)};
+					        
+							Mensagem resposta = new Mensagem(args);
+							
+							String sendData = Mensagem.codificarTCP(resposta);
+							
+							writer.writeBytes(sendData + "\n");
+							
+							FileInputStream fis = new FileInputStream(path);
+							
+							byte[] buffer = new byte[TAM_PACOTE];
+							
+							while (fis.read(buffer) > 0) {
+								
+								String[] argumentos = {"DADO",
+														new String(buffer)};
+								
+								resposta = new Mensagem(argumentos);
+								
+								sendData = Mensagem.codificarTCP(resposta);
+								
+								printDebug("Enviando parte do arquivo por TCP:");
+								writer.writeBytes(sendData + "\n");
+							}
+							
+							String[] argumentos = {"DADO",
+									null};
 			
-			// Ler do socket (cliente envia informação primeiro)
-			String texto = reader.readLine();
+							resposta = new Mensagem(argumentos);
 			
-			// Processar a informação
-			System.out.println("Arquivo requisitado: " + texto);
-			
-			// Enviar arquivo solicitado para o cliente
-			writer.writeBytes("DOWNLOAD_NEGADO");
-			
+							sendData = Mensagem.codificarTCP(resposta);
+							
+							// Sinalização de que o download acabou
+							writer.writeBytes(sendData + "\n");
+							
+							printDebug("Envio finalizado");
+							
+							fis.close();
+						}
+						else {
+														
+							// Enviar informação para o cliente
+							String[] argumentos = {"DOWNLOAD_NEGADO"};
+							Mensagem resposta = new Mensagem(argumentos);
+							
+							String sendData = Mensagem.codificarTCP(resposta);
+							
+							printDebug("Enviando requisição por TCP");
+							writer.writeBytes(sendData + "\n");
+							
+							
+							os.close();
+							is.close();
+							no.close();
+							
+							printDebug("DOWNLOAD_NEGADO enviado");
+						}
+						
+						break;
+						
+					default:
+						System.out.println("Não foi possível identificar o pacote TCP!");
+				}
+				
+				
 			} catch (Exception e) {
 				
 			}
 		}
 	}
+	
 	
 	private static void lerInfos() throws IOException {
 		// Ler do teclado IP, porta e pasta
@@ -327,14 +510,14 @@ public class Peer {
 		return msgResposta.getResultadoSearch();
 	}
 	
-	private static void requisitarDownload() throws Exception {
+	private static void requisitarDownload(String ipDestino, String portDestino, Socket s) throws Exception {
 		
 		String[] argumentos = {
 				"DOWNLOAD",
 				arquivoDownload
 		};
 		
-		enviarTCP(argumentos);
+		enviarTCP(ipDestino, portDestino, s, argumentos);
 		
 		System.out.println("Requisição DOWNLOAD enviado");
 	}
@@ -348,7 +531,7 @@ public class Peer {
 		
 		Mensagem msg = new Mensagem(argumentos);
 		
-		sendData = Mensagem.codificar(msg);
+		sendData = Mensagem.codificarUDP(msg);
 		
 		// Criação de um datagrama com endereço e porta do host remoto 10098
 		DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, IPAddress, portaServerUDP);
@@ -358,30 +541,23 @@ public class Peer {
 	}
 	
 	// TODO: terminar aqui
-	private static void enviarTCP(String[] argumentos) throws Exception {
+	private static void enviarTCP(String ipDestino, String portDestino, Socket s, String[] argumentos) throws Exception {
 		// Tenta criar uma conexão com o host "remoto" 127.0.0.1 na porta 9000
 		// O socket s tem uma porta designada pelo sistema operacional entre 1024 e 65535
-		Socket s = new Socket(ipDownload, Integer.parseInt(portDownload));
 		
 		// Cria a cadeia de saída (escrita) de informações para o socket
 		OutputStream os = s.getOutputStream();
 		DataOutputStream writer = new DataOutputStream(os);
-	
-		// Cria a cadeia de entrada (leitura) de informações do socket
-		InputStreamReader is = new InputStreamReader(s.getInputStream());
-		BufferedReader reader = new BufferedReader(is);
-		
+				
 		// TODO: passar a utilizar a classe Mensagem para o envio TCP
-		String texto = argumentos[1];
+		//String texto = argumentos[1];
 		
-		// Oq acontece se tirar o \n ?
-		//writer.writeBytes(texto + '\n');
-		writer.writeBytes(texto);
+		Mensagem msg = new Mensagem(argumentos);
+		String sendData = Mensagem.codificarTCP(msg);
 		
-		String response = reader.readLine(); // BLOCKING!
-		System.out.println("Recebido do Servidor: " + response);
-		// Finalizar comexão
-		s.close();
+		printDebug("Enviando requisição por TCP");
+		writer.writeBytes(sendData + "\n");
+		
 	}
 	
 	private static Mensagem aguardarCallbackUDP() throws Exception {
@@ -396,8 +572,14 @@ public class Peer {
 		clientSocket.receive(recPkt); //BLOCKING
 		
 		// Transformar informação do pacote recebido
-		return Mensagem.decodificar(recPkt);
+		return Mensagem.decodificarUDP(recPkt);
 		
+	}
+	
+	private static void printDebug(String msg) {
+		if (debug) {
+			System.out.println(msg);
+		}
 	}
 	
 

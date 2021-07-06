@@ -8,7 +8,7 @@ import java.util.Map;
 
 public class Servidor {
 	
-	private static boolean debug = true;
+	private static boolean debug = false;
 	
 	private static int porta = 10098;
 	
@@ -68,7 +68,7 @@ public class Servidor {
 		public void run() {
 			printDebug("Pacote recebido, identificando...");
 			
-			Mensagem mensagem = Mensagem.decodificar(recPkt);
+			Mensagem mensagem = Mensagem.decodificarUDP(recPkt);
 			
 			switch (mensagem.getTipo()) {
 			
@@ -130,7 +130,6 @@ public class Servidor {
 				System.out.println("Erro ao enviar LEAVE_OK: " + e);
 			}
 		}
-		
 	}
 	
 	static class LeavePeer extends Thread{
@@ -225,7 +224,7 @@ public class Servidor {
 		
 		Mensagem msg = new Mensagem(argumentos);
 		
-		sendBuffer = Mensagem.codificar(msg);
+		sendBuffer = Mensagem.codificarUDP(msg);
 		
 		// Descobrir o endereço de IP e porta do cliente pelo pacote recebido
 		InetAddress IPAddress = recPkt.getAddress();
