@@ -170,6 +170,7 @@ public class Peer {
 		public void run() {
 
 			try {
+				printDebug("Iniciando thread de download");
 				// TODO: remover ip e port de variável global para permitir múltiplos downloads
 				Socket s = new Socket(ipDownload, Integer.parseInt(portDownload));
 				
@@ -212,24 +213,36 @@ public class Peer {
 					
 					printDebug("Tamanho do arquivo: " + String.valueOf(restante));
 					
+					// ATENÇÃO COM O S!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+					DataInputStream dis = new DataInputStream(s.getInputStream());
+					int read = 0;
+					int len = buffer.length;
+					
 					while (restante > 0) {
 						
-						dados = readerTCP.readLine(); // BLOCKING!
+						printDebug("Aguardando novo pacote..");
 						
-						buffer = msg.getParteArquivo();
+						//dados = readerTCP.readLine(); // BLOCKING!
+						read = dis.read(buffer, 0, len);
 						
-						if (buffer == null) {
-							printDebug("Fim. Restante: " + String.valueOf(restante));
-							break;
+						if (restante < Integer.MAX_VALUE) {
+							// Atualizar o tamanho da leitura
+							len = Math.min(buffer.length, (int)restante);
 						}
 						
-						fos.write(buffer, 0, buffer.length);
+						restante -= read;
 						
-						restante = restante - TAM_PACOTE;
-						
-						printDebug("Restam: " + String.valueOf(restante));
+						printDebug("Escrevendo no fos");
+						fos.write(buffer, 0, read);
+
 					}
 					
+					printDebug("Fim do loop de download!");
+					
+				}
+				else {
+					printDebug("Mensagem inesperada:");
+					printDebug(msg.getTipo());
 				}
 				
 				// Finalizar conexão
@@ -330,6 +343,8 @@ public class Peer {
 					        
 							Mensagem resposta = new Mensagem(args);
 							
+							printDebug("Enviando pacote TCP\nTipo: " + resposta.getTipo());
+							
 							String sendData = Mensagem.codificarTCP(resposta);
 							
 							writer.writeBytes(sendData + "\n");
@@ -338,30 +353,18 @@ public class Peer {
 							
 							byte[] buffer = new byte[TAM_PACOTE];
 							
+							
+							///////////////////// CUIDADO COM OS SOCKETS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+							// Selecionar o outputstream do socket
+							// OutputStream os = s.getOutputStream();
+							// Stream para enviar o arquivo
+							DataOutputStream dos = new DataOutputStream(os);
+							
 							while (fis.read(buffer) > 0) {
-								
-								String[] argumentos = {"DADO",
-														new String(buffer)};
-								
-								resposta = new Mensagem(argumentos);
-								
-								sendData = Mensagem.codificarTCP(resposta);
-								
-								printDebug("Enviando parte do arquivo por TCP:");
-								writer.writeBytes(sendData + "\n");
+								dos.write(buffer);
 							}
 							
-							String[] argumentos = {"DADO",
-									null};
-			
-							resposta = new Mensagem(argumentos);
-			
-							sendData = Mensagem.codificarTCP(resposta);
-							
-							// Sinalização de que o download acabou
-							writer.writeBytes(sendData + "\n");
-							
-							printDebug("Envio finalizado");
+							printDebug("ENVIO FINALIZADO!");
 							
 							fis.close();
 						}
