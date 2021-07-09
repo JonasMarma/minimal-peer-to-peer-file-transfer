@@ -19,6 +19,9 @@ public class Mensagem {
 	private String arquivoProcurado;
 	private List<String> resultadoSearch;
 	
+	// Relacionado ao update
+	private String arquivoUpdate;
+	
 	// Relacionado à requisição de Download
 	private String arquivoDownload;
 	private long tamanhoArquivo;
@@ -47,6 +50,12 @@ public class Mensagem {
 	    	case "SEARCH_OK":
 	    		tipo = null;
 	    		resultadoSearch = Arrays.asList(argumentos[1].split("/"));
+	    		break;
+	    		
+	    	case "UPDATE":
+	    		ip = argumentos[1];
+	    		portaTCP = argumentos[2];
+	    		arquivoUpdate = argumentos[3];
 	    		break;
 	    		
 	    	case "DOWNLOAD":
@@ -126,6 +135,10 @@ public class Mensagem {
 	
 	public List<String> getResultadoSearch() {
 		return resultadoSearch;
+	}
+	
+	public String getArquivoUpdate() {
+		return arquivoUpdate;
 	}
 	
 	public String getArquivoDownload() {
