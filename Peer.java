@@ -15,23 +15,27 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 public class Peer {
 	
-	private static boolean debug = true;
-
+	private static boolean debug = false;
+	
 	private static String ipLocal;
 	private static String portLocal;
 	private static String pasta;
 	
 	private static String listaArquivos;
 	
-	private static DatagramSocket clientSocket;
+	private static DatagramSocket aliveSocket;
+	private static DatagramSocket UDPsocket;
 	
 	private static int portaServerUDP = 10098;
 	private static String ipServer = "127.0.0.1";
 	
+	private static List<String> resultadoSearch;
 	private static String arquivoDownload;
 	
 	private static Boolean executando = true;
@@ -52,13 +56,23 @@ public class Peer {
 		
 		while (executando) {
 			
+			if (!logado) {
+				// Fechar a conexão
+				if (aliveSocket != null && !aliveSocket.isClosed()) {
+					printDebug("Fechando aliveSocket");
+					aliveSocket.close();
+				}
+				if (UDPsocket != null && !UDPsocket.isClosed()) {
+					printDebug("Fechando UDPsocket");
+					UDPsocket.close();
+				}
+			}
+			
 			System.out.println("Escolha um comando: JOIN, SEARCH, DOWNLOAD, LEAVE");
 			BufferedReader keyboardReader = new BufferedReader(new InputStreamReader(System.in));
 			
-			
 			String[] comando = keyboardReader.readLine().split(" ");
 			
-						
 			switch (comando[0]) {
 			
 	        	case "JOIN":
@@ -71,7 +85,8 @@ public class Peer {
 					lerInfos();
 					lerListaArquivos();
 					
-					clientSocket = new DatagramSocket();
+					// Socket UDP para receber ALIVE
+					aliveSocket = new DatagramSocket();
 					
 					Boolean joinOk = false;
 					
@@ -86,13 +101,16 @@ public class Peer {
 						}
 					}
 					
+					AliveOk aliveOk = new AliveOk();
+					aliveOk.start();
+					
 					logado = true;
 					
 					// Abrir a porta TCP informada ao servidor para enviar downloads
 					OuvirTCP threadTCP = new OuvirTCP();
 					threadTCP.start();
 					
-					System.out.println("Sou peer " + "[IP]" + ":" + "[porta]" + " com arquivos " + listaArquivos.replace('/',' '));
+					System.out.println("Sou peer " + ipLocal + ":" + portLocal + " com arquivos " + listaArquivos.replace('/',' '));
 					
 					break;
 	        	
@@ -105,16 +123,15 @@ public class Peer {
 	        		
 	    			requisitarLeave();
 	    			
-	    			// TODO: Isso é bem colocável dentro de um método!!! Só ver o caso do search
 					Boolean leaveOk = false;
 					
 					while (leaveOk == false) {
 						
 						requisitarLeave();
 						
-						joinOk = aguardarLeaveOk();
+						leaveOk = aguardarLeaveOk();
 						
-						if (joinOk == false) {
+						if (leaveOk == false) {
 							printDebug("ERRO DE CONEXÃO - REENVIANDO LEAVE");
 						}
 					}
@@ -135,7 +152,7 @@ public class Peer {
 	        		arquivoDownload = keyboardReader.readLine();
 	        		requisitarSearch();
 	        		
-	        		List<String> resultadoSearch = null;
+	        		resultadoSearch = null;
 					
 					while (resultadoSearch == null) {
 						
@@ -147,7 +164,10 @@ public class Peer {
 					}
 					
 	        		System.out.println("Peers com arquivo solicitado:");
-	        		System.out.println(resultadoSearch);
+	        		for (String peer : resultadoSearch) {
+	        			System.out.println(peer);
+	        		}
+	        		
 	        		break;
 	        	
 	        	case "DOWNLOAD":
@@ -170,16 +190,56 @@ public class Peer {
 			}
 		}
 		
-		// Fechar a conexão
-		clientSocket.close();
-		
+	}
+	
+	static class AliveOk extends Thread{
+		public void run() {
+			
+			while (logado) {
+				printDebug("Começando a ouvir ALIVE");
+			
+				// Receber datagrama do servidor
+				// Buffer de recebimento
+				byte[] recBuffer = new byte[1024];
+				DatagramPacket recPkt = new DatagramPacket(recBuffer, recBuffer.length);
+				
+		        try {
+		        	
+		        	if (!aliveSocket.isClosed()) {
+		        		aliveSocket.receive(recPkt); //BLOCKING
+		        		
+			    		Mensagem msg = Mensagem.decodificarUDP(recPkt);
+			    		
+			    		if (msg.getTipo().equals("ALIVE")) {
+			    			printDebug("ALIVE RECEBIDO!");
+			    			
+			    			String[] argumentos = {"ALIVE_OK",
+							    					ipLocal,
+							    					portLocal};
+			    			
+			    			enviarUDP(aliveSocket, argumentos);
+			    			
+			    		}
+			    		else if (msg.getTipo().equals("LEAVE_OK")) {
+			    			printDebug("Recebido LEAVE_OK dentro da THREAD Alive. Encerrando a thread!");
+			    			break;
+			    		}
+		        	}
+		        }
+		        catch (Exception e) {
+		        	printDebug(e);
+		        }
+		        
+			}
+			printDebug("Parando de ouvir ALIVE");
+		}
 	}
 	
 	static class FazerDownload extends Thread{
 		
 		String ipDownload;
 		String portDownload;
-		String arquivoDownlaod;
+		String arquivoDownload;
 		
 		public FazerDownload(String ip, String port, String arquivo) {
 			ipDownload = ip;
@@ -202,25 +262,54 @@ public class Peer {
 					printDebug("Não foi possível acessar o peer");
 				}
 				
-				// TODO: Lógica para pedir o download para outro peer
+				/* Lógica para controlar o envio de novas tentativas de download
+				 * A cada iteração do while são enviadas requisições para todos os peers na lista, exceto o último solicitado
+				 * Ao final, caso nenhum peet aceite o download, espera-se 5 segundos
+				 * */
 				else if (msg.getTipo().equals("DOWNLOAD_NEGADO")) {
-					System.out.println("peer " + "[IP]:[porta]" + " negou o download, pedindo agora para o peer " + "[IP]:[porta]");
+					
+					String ipDownloadAntigo = ipDownload;
+					String portDownloadAntigo = portDownload;
+					
+					while (msg.getTipo().equals("DOWNLOAD_NEGADO")) {
+						
+		        		for (String peer : resultadoSearch) {
+		        			String[] ipPort = peer.split(":");
+		        			ipDownload = ipPort[0];
+		        			portDownload = ipPort[1];
+		        			
+		        			if (!peer.equals(ipDownloadAntigo + ":" + portDownloadAntigo)) {
+								System.out.println("peer " + ipDownloadAntigo + ":" +portDownloadAntigo + " negou o download, pedindo agora para o peer " + ipDownload + ":" + portDownload);
+								s = new Socket(ipDownload, Integer.parseInt(portDownload));
+								requisitarDownload(ipDownload, portDownload, s);
+								msg = receberTCP(s);
+								
+								ipDownloadAntigo = ipDownload;
+								portDownloadAntigo = portDownload;
+								
+								if (!msg.getTipo().equals("DOWNLOAD_NEGADO")) {
+									break;
+								}
+		        			}
+		        		}
+		        		
+		        		TimeUnit.SECONDS.sleep(5);
+
+					}
+					
 				}
 				
-				else if (msg.getTipo().equals("DOWNLOAD_ACEITO")) {
+				if (msg.getTipo().equals("DOWNLOAD_ACEITO")) {
 					
 					byte[] buffer = new byte[TAM_PACOTE];
 					
 					long tamArquivo;
 					long restante;
-					
 					printDebug("O peer aceitou transferir o arquivo");
-					
 					tamArquivo = msg.getTamanhoArquivo();
 					
 					// TODO: e quando está continuando um download já iniciado?
 					restante = tamArquivo;
-					
 					printDebug("Tamanho do arquivo: " + String.valueOf(restante));
 					
 					// Stream de entrada de dados
@@ -306,15 +395,13 @@ public class Peer {
 					printDebug("Conexão TCP recebida! Criando thread de atendimento:");
 					ThreadAtendimento thread = new ThreadAtendimento(welcomeSocket);
 					thread.start();
-					
 				}
 				
 				// TODO: Ao fazer LEAVE, parece que não está chegando aqui!
 				serverSocket.close();
 				
-			} catch (IOException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
+			} catch (Exception e) {
+				printDebug(e);
 			}
 			
 		}
@@ -343,7 +430,6 @@ public class Peer {
 				
 				Mensagem msg = Mensagem.decodificarTCP(dados);
 				
-				
 				switch (msg.getTipo()) {
 					case "DOWNLOAD":
 						
@@ -353,17 +439,27 @@ public class Peer {
 						OutputStream os = no.getOutputStream();
 						DataOutputStream writer = new DataOutputStream(os);
 						
-						boolean permitir = true;
+						// Permitir ou negar o download aleatóriamente
+						double x = Math.random();
+						boolean permitir;
 						
-						// TODO: Usar o método enviarTCP() para fazer o envio dos dados!!!
+						String path = pasta + "/" + msg.getArquivoDownload();
+						
+				        File f = new File(path);
+				        
+				        boolean existe = f.exists();
+						
+						if (x > 0.5 && existe) {
+							permitir = true;
+						}
+						else {
+							permitir = false;
+						}
 						
 						if (permitir) {
 							
-							String path = pasta + "/" + msg.getArquivoDownload();
-							
-					        File f = new File(path);
-					        long fileSize = f.length();
-							
+							long fileSize = f.length();
+														
 							String[] args = {"DOWNLOAD_ACEITO",
 											String.valueOf(fileSize)};
 					        
@@ -379,11 +475,10 @@ public class Peer {
 							
 							byte[] buffer = new byte[TAM_PACOTE];
 							
-							// Selecionar o outputstream do socket
-							// OutputStream os = s.getOutputStream();
 							// Stream para enviar o arquivo
 							DataOutputStream dos = new DataOutputStream(os);
 							
+							// LOOP DE ENVIO
 							while (fis.read(buffer) > 0) {
 								dos.write(buffer);
 							}
@@ -393,8 +488,7 @@ public class Peer {
 							fis.close();
 						}
 						else {
-														
-							// Enviar informação para o cliente
+							
 							String[] argumentos = {"DOWNLOAD_NEGADO"};
 							Mensagem resposta = new Mensagem(argumentos);
 							
@@ -438,10 +532,8 @@ public class Peer {
 		portLocal = reader.readLine(); //BLOCKING!
 		
 		// Ler pasta
-		//TODO Essa é uma pasta de debug:
 		System.out.println("Insira a pasta: ");
-		String dir = reader.readLine(); //BLOCKING!
-		pasta = "C:/temp/" + dir;
+		pasta = reader.readLine(); //BLOCKING!
 		
 	}
 	
@@ -471,10 +563,11 @@ public class Peer {
 				"JOIN",
 				ipLocal,
 				portLocal,
-				listaArquivos
+				listaArquivos,
 		};
 		
-		enviarUDP(argumentos);
+		aliveSocket = new DatagramSocket();
+		enviarUDP(aliveSocket, argumentos);
 		
 		printDebug("JOIN enviado");
 	}
@@ -483,10 +576,14 @@ public class Peer {
 		
 		printDebug("Aguardando JOIN_OK...");
 		
-		Mensagem msgResposta = aguardarCallbackUDP();
+		Mensagem msgResposta = aguardarCallbackUDP(aliveSocket);
+		
+		// Remover o timeout para não ter timeout esperando o alive
+		aliveSocket.setSoTimeout(0);
 		
 		if (msgResposta != null) {
 			if (msgResposta.getTipo().equals("JOIN_OK")) {
+				printDebug("JOIN_OK recebido");
 				return true;
 			}
 		}
@@ -502,7 +599,7 @@ public class Peer {
 				portLocal
 		};
 		
-		enviarUDP(argumentos);
+		enviarUDP(aliveSocket, argumentos);
 		
 		printDebug("LEAVE enviado");
 	}
@@ -510,7 +607,7 @@ public class Peer {
 	private static boolean aguardarLeaveOk() throws Exception {		
 		
 		printDebug("Aguardando LEAVE_OK...");
-		Mensagem msgResposta = aguardarCallbackUDP();
+		Mensagem msgResposta = aguardarCallbackUDP(aliveSocket);
 		
 		if (msgResposta != null) {
 			if (msgResposta.getTipo().equals("LEAVE_OK")) {
@@ -524,10 +621,13 @@ public class Peer {
 		
 		String[] argumentos = {
 				"SEARCH",
-				arquivoDownload
+				arquivoDownload,
+				ipLocal,
+				portLocal
 		};
 		
-		enviarUDP(argumentos);
+		UDPsocket = new DatagramSocket();
+		enviarUDP(UDPsocket, argumentos);
 		
 		printDebug("SEARCH enviado");
 	}
@@ -539,10 +639,11 @@ public class Peer {
 				"UPDATE",
 				ipLocal,
 				portLocal,
-				arquivo
+				arquivo,
 		};
 		
-		enviarUDP(argumentos);
+		UDPsocket = new DatagramSocket();
+		enviarUDP(UDPsocket, argumentos);
 		
 		printDebug("UPDATE enviado");
 	}
@@ -551,13 +652,16 @@ public class Peer {
 		
 		printDebug("Aguardando UPDATE_OK...");
 		
-		Mensagem msgResposta = aguardarCallbackUDP();
+		//UDPsocket = new DatagramSocket();
+		Mensagem msgResposta = aguardarCallbackUDP(UDPsocket);
 		
 		if (msgResposta != null) {
 			if (msgResposta.getTipo().equals("UPDATE_OK")) {
+				UDPsocket.close();
 				return true;
 			}
 		}
+		UDPsocket.close();
 		return false;
 		
 	}
@@ -565,11 +669,14 @@ public class Peer {
 	private static List<String> aguardarResultadoSearch() throws Exception {
 		printDebug("Aguardando resultado do SEARCH...");
 		
-		Mensagem msgResposta = aguardarCallbackUDP();
+		//UDPsocket = new DatagramSocket();
+		Mensagem msgResposta = aguardarCallbackUDP(UDPsocket);
 		
 		if (msgResposta != null) {
+			UDPsocket.close();
 			return msgResposta.getResultadoSearch();
 		}
+		UDPsocket.close();
 		return null;
 	}
 	
@@ -585,7 +692,7 @@ public class Peer {
 		printDebug("Requisição DOWNLOAD enviado");
 	}
 	
-	private static void enviarUDP(String[] argumentos) throws Exception {
+	private static void enviarUDP(DatagramSocket ds, String[] argumentos) throws Exception {
 		// Endereço de IP do servidor que receberá o datagram
 		InetAddress IPAddress = InetAddress.getByName(ipServer);
 		
@@ -600,7 +707,7 @@ public class Peer {
 		DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, IPAddress, portaServerUDP);
 				
 		// Enviar o datagrama
-		clientSocket.send(sendPacket);
+		ds.send(sendPacket);
 	}
 	
 	private static void enviarTCP(String ipDestino, String portDestino, Socket s, String[] argumentos) throws Exception {
@@ -610,9 +717,6 @@ public class Peer {
 		// Cria a cadeia de saída (escrita) de informações para o socket
 		OutputStream os = s.getOutputStream();
 		DataOutputStream writer = new DataOutputStream(os);
-				
-		// TODO: passar a utilizar a classe Mensagem para o envio TCP
-		//String texto = argumentos[1];
 		
 		Mensagem msg = new Mensagem(argumentos);
 		String sendData = Mensagem.codificarTCP(msg);
@@ -644,7 +748,7 @@ public class Peer {
 	/*
 	 * Aguardar uma resposta UDP. Se a resposta não vir dentro do tempo de timeout, retornar null
 	 */
-	private static Mensagem aguardarCallbackUDP() throws Exception {
+	private static Mensagem aguardarCallbackUDP(DatagramSocket ds) throws Exception {
 		// Receber datagrama do servidor
 		
 		// Buffer de recebimento
@@ -652,10 +756,11 @@ public class Peer {
 		DatagramPacket recPkt = new DatagramPacket(recBuffer, recBuffer.length);
 		
 		// Esperar até receber um pacote ou timeout
-		clientSocket.setSoTimeout(TIMEOUT);
+		ds.setSoTimeout(TIMEOUT);
 		
         try {
-        	clientSocket.receive(recPkt); //BLOCKING
+        	ds.receive(recPkt); //BLOCKING
+        	printDebug("Callback UPD recebido");
     		return Mensagem.decodificarUDP(recPkt);
         }
         catch (Exception e) {

@@ -43,8 +43,15 @@ public class Mensagem {
 	    		portaTCP = argumentos[2];
 	    		break;
 	    		
+	    	case "ALIVE_OK":
+	    		ip = argumentos[1];
+	    		portaTCP = argumentos[2];
+	    		break;
+	    		
 	    	case "SEARCH":
 	    		arquivoProcurado = argumentos[1];
+	    		ip = argumentos[2];
+	    		portaTCP = argumentos[3];
 	    		break;
 	    		
 	    	case "SEARCH_OK":
@@ -65,10 +72,6 @@ public class Mensagem {
 	    	case "DOWNLOAD_ACEITO":
 	    		tamanhoArquivo = Long.parseLong(argumentos[1]);
 				break;
-	    		
-	    	case "DADO":
-	    		parteArquivo = argumentos[1].getBytes();
-	    		break;
 	    	
     		// Mensagens só com o tipo (exemplos: JOIN_OK, LEAVE_OK, etc...)
 	    	default:
@@ -126,8 +129,9 @@ public class Mensagem {
 	}
 	
 	public String getPortaTCP() {
-		return String.valueOf(portaTCP);
+		return portaTCP;
 	}
+	
 	
 	public String getArquivoProcurado() {
 		return arquivoProcurado;
